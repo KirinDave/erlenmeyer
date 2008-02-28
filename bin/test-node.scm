@@ -1,5 +1,5 @@
 #! /usr/bin/env mzscheme -rq
-(require (file "/Users/dfayram/Projects/erlenmeyer/lib/erlenmeyer.zo"))
+(require (file "/Users/dfayram/Projects/erlenmeyer/src/erlenmeyer.scm"))
 
 (define (read-loop)
   (read-next-packet)

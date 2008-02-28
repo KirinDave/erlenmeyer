@@ -51,21 +51,26 @@
   (define ERL_NEW_FUN       112)
 
 (define (read-size-record)
-  (integer-bytes->integer (read-bytes 4 erlang-input-port) #f))
+  (let ((size (read-bytes 4 erlang-input-port)))
+    (fprintf (current-error-port) "RAW SIZE READ AS ~s~n" size)
+    (integer-bytes->integer size #f)))
 
 (define (read-sized-group)
   (let* ((size (read-size-record))
-        (packet-data (read-bytes size erlang-input-port)))
-    (printf "READ PACKET (~a): ~s" size packet-data)
+         (magic (read-magic-number))
+        (packet-data (read-bytes (- size 1) erlang-input-port)))
+    (fprintf (current-error-port) "READ PACKET (~s)(~s): ~s~n" size magic packet-data)
     packet-data))
 
 (define (read-magic-number)
-  (let ((magic (read-bytes 1 erlang-input-port)))
-    (= magic ERL_VERSION)))
+  (read-bytes 1 erlang-input-port))
 
 (define (read-next-packet)
-  (unless (read-magic-number) (raise `bad-magic))
-  (read-sized-group))
-
-    
+  ;(unless (read-magic-number) (raise `bad-magic))
+  (display "Going to read group...\n")
+  (read-sized-group)
+  (display "Read group!\n"))
+  ;(let ((r (read-bytes 5 erlang-input-port)))
+  ;  (if (eof-object? r) (begin (fprintf (current-error-port) "EOF! EXITING") (exit)))
+  ;    (fprintf (current-error-port) "~s~n" (read-bytes 5 erlang-input-port))))
 ) ; End module
