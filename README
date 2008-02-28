@@ -1,0 +1,2 @@
+Erlenmeyer is a binding between MzScheme and Erlang, allowing
+Erlang to open MzScheme processes as ports.
