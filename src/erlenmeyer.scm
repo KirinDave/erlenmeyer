@@ -1,7 +1,8 @@
 (module erlenmeyer mzscheme
   (require (lib "foreign.ss")) (unsafe!)
-  (provide read-next-packet 
-           bind-erlang-ports
+  (provide for-each-erlang-packet
+           read-next-packet 
+           bind-ports
            fd->input-port
            fd->output-port)
 
@@ -9,7 +10,7 @@
   (define erlang-input-port (current-input-port))
   (define erlang-output-port (current-output-port))
  
-  (define (bind-erlang-ports)
+  (define (bind-ports)
     (set! erlang-input-port  (fd->input-port 3 'erlang-in))
     (set! erlang-output-port (fd->output-port 4 'erlang-out)))
   
@@ -30,6 +31,7 @@
                   (_fun _int _scheme _int _int _int -> _scheme)))
   
 ; Data conversion functions
+  (define ERL_MAGIC_NUMBER  #"\203")
   (define ERL_VERSION       131)
   (define ERL_SMALL_INT     97)
   (define ERL_INT           98)
@@ -50,27 +52,44 @@
   (define ERL_FUN           117)
   (define ERL_NEW_FUN       112)
 
-(define (read-size-record)
-  (let ((size (read-bytes 4 erlang-input-port)))
-    (fprintf (current-error-port) "RAW SIZE READ AS ~s~n" size)
-    (integer-bytes->integer size #f)))
+; May return #eof or data
+(define (read-stream n) (read-bytes n erlang-input-port))
+; Must return data or throws 'unexpected-eof
+(define (read-stream-i n) 
+  (let ([data (read-bytes n erlang-input-port)])
+    (cond
+      ([eof-object? data] (raise 'unexpected-eof))
+      (else data))))
 
-(define (read-sized-group)
-  (let* ((size (read-size-record))
-         (magic (read-magic-number))
-        (packet-data (read-bytes (- size 1) erlang-input-port)))
-    (fprintf (current-error-port) "READ PACKET (~s)(~s): ~s~n" size magic packet-data)
-    packet-data))
+(define (read-size-field)
+  (let ([size-bytes (read-stream 4)])
+    (cond 
+      [(eof-object? size-bytes) size-bytes]
+      [else (integer-bytes->integer size-bytes #f #t)])))
 
 (define (read-magic-number)
-  (read-bytes 1 erlang-input-port))
+  (let ([mnum (read-stream-i 1)])
+    (unless (equal? ERL_MAGIC_NUMBER mnum) 
+      (raise `(bad-magic ,mnum)))
+    mnum))
+
+(define (read-record size)
+  (let* ([mnum       (read-magic-number)]
+         [data-bytes (read-stream-i (sub1 size))])
+     (fprintf (current-error-port) "RECORD (~s): ~s~n" mnum data-bytes)
+     data-bytes))
 
 (define (read-next-packet)
-  ;(unless (read-magic-number) (raise `bad-magic))
-  (display "Going to read group...\n")
-  (read-sized-group)
-  (display "Read group!\n"))
-  ;(let ((r (read-bytes 5 erlang-input-port)))
-  ;  (if (eof-object? r) (begin (fprintf (current-error-port) "EOF! EXITING") (exit)))
-  ;    (fprintf (current-error-port) "~s~n" (read-bytes 5 erlang-input-port))))
+  (let ([size-record (read-size-field)])
+    (cond 
+      [(eof-object? size-record) eof]
+      [else (read-record size-record)])))
+
+(define (for-each-erlang-packet lam)
+  (display "Waiting on packet to read.\n")
+  (let ([packet (read-next-packet)])
+    (case packet
+      [(eof) eof]
+      [else (lam packet) (for-each-erlang-packet lam)])))
+  
 ) ; End module

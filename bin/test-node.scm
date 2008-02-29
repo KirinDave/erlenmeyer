@@ -2,9 +2,8 @@
 (require (file "/Users/dfayram/Projects/erlenmeyer/src/erlenmeyer.scm"))
 
 (define (read-loop)
-  (read-next-packet)
-  (read-loop))
+  (bind-ports)
+  (for-each-erlang-packet (lambda (x) (display "I got a golden ticket!\n"))))
 
-(bind-erlang-ports)
 (read-loop)
 
