@@ -1,9 +1,9 @@
 #! /usr/bin/env mzscheme -rq
-(require (file "/Users/dfayram/Projects/erlenmeyer/src/erlenmeyer.scm"))
+(require (file "/Users/tom/dev/mojombo/erlenmeyer/src/erlen.scm"))
 
 (define (read-loop)
   (bind-ports)
-  (for-each-erlang-packet (lambda (x) (display "I got a golden ticket!\n"))))
+  (for-each-erlang-packet (lambda (x) (fprintf (current-error-port) "got ~s~n" x))))
 
 (read-loop)
 

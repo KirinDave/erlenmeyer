@@ -32,7 +32,7 @@
   
 ; Data conversion functions
   (define ERL_MAGIC_NUMBER  #"\203")
-  (define ERL_VERSION       131)
+  (define ERL_VERSION       #"\141")
   (define ERL_SMALL_INT     97)
   (define ERL_INT           98)
   (define ERL_SMALL_BIGNUM  110)
