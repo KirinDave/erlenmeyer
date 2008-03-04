@@ -1,5 +1,5 @@
 #! /usr/bin/env mzscheme -rq
-(require (file "/Users/tom/dev/mojombo/erlenmeyer/src/erlen.scm"))
+(require (file "../src/erlen.scm"))
 
 (define (read-loop)
   (bind-ports)

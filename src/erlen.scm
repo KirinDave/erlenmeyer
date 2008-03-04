@@ -137,7 +137,11 @@
 ;}
 
 (define (read-4 data)
-  (read-bytes 4 data)
+  (fprintf (current-error-port) "read-4...\n")
+  (let ([val (read-bytes 4 data)])
+    (fprintf (current-error-port) "read-4:~s~n" val)
+    val
+  )
 )
 
 ;// tuples, lists
@@ -263,6 +267,7 @@
   (unless (equal? (read-1 data) ERL_SMALL_INT)
     (raise 'invalid-type-not-small-int)
   )
+  (fprintf (current-error-port) "Read small-int is clear. Whew\n")
   (integer-bytes->integer (bytes-append #"\0" (read-1 data)) #f #t)
 )
 
@@ -446,13 +451,11 @@
 ;}
 
 (define (read-any-raw data)
-  ; (fprintf (current-error-port) "data type ~s = ~s~n" ERL_SMALL_INT (peek-1 data))
+  (fprintf (current-error-port) "data type ~s = ~s~n" ERL_SMALL_INT (peek-1 data))
   (let ((data-type (peek-1 data)))
-    (
-      [cond 
-        ((equal? data-type ERL_SMALL_INT) [read-small-int data])
-        (else ())
-      ]
+    (cond 
+      [(equal? data-type ERL_SMALL_INT) (read-small-int data)]
+      [else ()]
     )
   )
 )
@@ -471,6 +474,8 @@
 ;}
 
 (define (read-any-from data)
+  (fprintf (current-error-port) "Input socket is closed: ~s~n" (port-closed? erlang-input-port))
+
   (read-4 data)
   [unless (equal? (read-1 data) ERL_VERSION)
     (raise 'bad-version)
@@ -481,14 +486,12 @@
 ; in erlectricity this is outside the C extension in the Ruby code
 
 (define (for-each-erlang-packet lam)
-  (display "Waiting on packet to read.\n")
+  (fprintf (current-error-port) "for-each-erlang-packet\n")
   (let ((packet (read-any-from erlang-input-port)))
-    (
-      ; (fprintf (current-error-port) "packet is ~s~n" packet)
       (lam packet)
       (for-each-erlang-packet lam)
-    )
   )
 )
+
 
 ) ; module
