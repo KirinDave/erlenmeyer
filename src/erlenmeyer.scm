@@ -1,11 +1,10 @@
 (module erlenmeyer mzscheme
-  (require (lib "foreign.ss")) (unsafe!)
+  (require (lib "foreign.ss")
+	   (lib "match.ss")) (unsafe!)
   (provide for-each-erlang-packet
            read-next-packet 
            fd->input-port
            fd->output-port)
-
-
 
 ; The all-important fd->input port code thanks to Matthew Flatt
 (define (fd->input-port fd name)
@@ -49,11 +48,6 @@
 (define ERL_NEW_FUN       112)
 
 ; Reading primitives
-(define (peek-1 data) (peek-bytes 1 0 data))
-(define (peek-2 data) (peek-bytes 2 0 data))
-(define (read-1 data) (read-bytes 1 data))
-(define (read-4 data) (read-bytes 4 data))
-
 (define (read-stream n) (read-bytes n erlang-input-port))
 (define (read-stream-i n) 
   (let ([data (read-bytes n erlang-input-port)])
@@ -61,30 +55,79 @@
       ([eof-object? data] (raise 'unexpected-eof))
       (else data))))
 
+; Frequently used functions in erlang binary takes a single unsigned byte and maps it to an int.
+(define (byte->uint byte) (integer-bytes->integer (bytes-append #"\0" bytes) #f #t))
+(define (bytes->int bytes) (integer-bytes->integer bytes #t #t))
+
+; Specification language macro
 (define-syntax define-binary-parser
   (syntax-rules ()
-    [(_ name (byte-value processor) ...)
+    [(_ name (byte-value processor-spec) ...)
      (define name 
        (lambda (bytes)
-         (let ([identifier (bytes-ref bytes 0)])
-          (fprintf (current-error-port) "In term parser! Bytes: ~s~n" bytes)
-          (cond 
-            [(equal? identifier byte-value) 
-              (fprintf (current-error-port) "Matched ~s to ~s~n" identifier byte-value)
-              (processor (subbytes bytes 1))] ...
-            [else (raise `(unknown-data-type ,identifier ,bytes))]))))
-	  ]
-	)
-)
+	 (let ([identifier (bytes-ref bytes 0)]
+	       [dbytes (subbytes bytes 1)])
+	   (let-syntax ((xform
+	     (syntax-rules (small large custom ->)
+	       [(_ (small -> byte-converter))   (parse-sized-entity dbytes 2 byte-converter)]
+	       [(_ (large -> byte-converter))   (parse-sized-entity dbytes 4 byte-converter)]
+	       [(_ (number -> byte-converter))  (parse-raw-entity dbytes number byte-converter)]
+	       [(_ (custom raw-byte-converter)) (raw-byte-converter dbytes)])))
+	   (fprintf (current-error-port) "In term parser! Bytes: ~s~n" bytes)
+	   (cond 
+	    [(equal? identifier byte-value) 
+	       (fprintf (current-error-port) "Matched ~s to ~s~n" identifier byte-value)
+	       (xform processor-spec)] ...
+	     [else (raise `(unknown-data-type ,identifier ,bytes))])))))]))
+
+; Parser helpers
+(define (parse-raw-entity bytes size processor)
+  (let [(rem-bytes  (subbytes bytes size))
+	(data-bytes (subbytes bytes 0 size))]
+    (cons (processor data-bytes) rem-bytes)))
+
+(define (parse-sized-entity bytes size-field-length processor)
+  (let* [(sizebytes    (subbytes bytes 0 size-field-length))
+	 (size         (integer-bytes->integer sizebytes #f #t))]
+    (parse-raw-entity (subbytes bytes size-field-length) size processor)))
 
 ; Data mappers
 
 (define-binary-parser erlang-term-parser
-  [ERL_SMALL_INT (lambda (bytes) (integer-bytes->integer (bytes-append #"\0" bytes) #f #t))]
-  [ERL_INT (lambda (bytes) (integer-bytes->integer bytes #t #t))]
-  [ERL_ATOM (lambda (bytes) (string->symbol (bytes->string/utf-8 (subbytes bytes 2))))]
-  [ERL_STRING (lambda (bytes) (bytes->string/utf-8 (subbytes bytes 2)))]
+  [ERL_SMALL_INT   (1 -> byte->uint)]
+  [ERL_INT         (4 -> bytes->int)]
+  [ERL_ATOM        (small -> (lambda (bytes) (string->symbol (bytes->string/utf-8 bytes))))]
+  [ERL_STRING      (small -> (lambda (bytes) (bytes->string/utf-8 bytes)))]
+  [ERL_BIN         (large -> (lambda (x) x))]
+  [ERL_NIL         (custom (lambda (x) '()))]
+  [ERL_LIST        (custom list-parser)]
+  [ERL_SMALL_TUPLE (custom small-tuple-parser)]
 )
+;
+; Recursive datatype parsers
+;
+
+; Tuples
+(define (repeat-parser dbytes size-field-size size-field-converter finalizer)
+  (let* [(sbytes  (subbytes dbytes 0 size-field-size))
+	 (ebytes (subbytes dbytes size-field-size))
+	 (nelems (size-field-converter sbytes))]
+    ; input is: bytes, countdown, accumulated elements
+    (letrec [(loop (lambda (b c accum)
+		     (fprintf (current-error-port) "Inner loop (~s) with ~s~n" c accum)
+		     (cond ((equal? c 0) (cons (finalizer (reverse accum)) b))
+			   (else 
+			     (match-let [((val . rbytes) (erlang-term-parser b))]
+					(loop rbytes (sub1 c) (cons val accum)))))
+	     ))]
+      (loop ebytes nelems (list)))))
+
+(define (small-tuple-parser dbytes) (repeat-parser dbytes 1 byte->uint (lambda (x) (list->vector x))))
+(define (large-tuple-parser dbytes) (repeat-parser dbytes 4 bytes->int (lambda (x) (list->vector x))))
+(define (list-parser dbytes) 
+  (match-let [((val . rbytes) (repeat-parser dbytes 4 bytes->int (lambda (x) x)))]
+	     (cons val (subbytes rbytes 1)))) ; Skip the trailing nil in lists.
+
 
 (define (read-size-field)
   (let ([size-bytes (read-stream 4)])
@@ -107,16 +150,14 @@
 (define (read-next-packet)
   (let ([size-record (read-size-field)])
     (cond 
-      [(eof-object? size-record) eof]
+      [(eof-object? size-record) (cons size-record #"")]
       [else (read-record size-record)])))
 
 (define (for-each-erlang-packet lam)
   (display "Waiting on packet to read.\n")
-  (let ([packet (read-next-packet)])
+  (match-let ([(packet . rembytes) (read-next-packet)])
     (cond 
       [(eof-object? packet) packet]
+      [(> (bytes-length rembytes) 0) (raise `(unknown-extra-data ,rembytes ,packet))]
       [else (lam packet) (for-each-erlang-packet lam)])))
-
-
-
 ) ; End module
