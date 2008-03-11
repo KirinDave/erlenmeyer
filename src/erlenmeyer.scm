@@ -56,8 +56,10 @@
       (else data))))
 
 ; Frequently used functions in erlang binary takes a single unsigned byte and maps it to an int.
-(define (byte->uint byte) (integer-bytes->integer (bytes-append #"\0" bytes) #f #t))
-(define (bytes->int bytes) (integer-bytes->integer bytes #t #t))
+(define (byte->uint byte) 
+  (integer-bytes->integer (bytes-append #"\0" byte) #f #t))
+(define (bytes->int bytes) 
+  (integer-bytes->integer bytes #t #t))
 
 ; Specification language macro
 (define-syntax define-binary-parser
@@ -80,17 +82,6 @@
 	       (xform processor-spec)] ...
 	     [else (raise `(unknown-data-type ,identifier ,bytes))])))))]))
 
-; Parser helpers
-(define (parse-raw-entity bytes size processor)
-  (let [(rem-bytes  (subbytes bytes size))
-	(data-bytes (subbytes bytes 0 size))]
-    (cons (processor data-bytes) rem-bytes)))
-
-(define (parse-sized-entity bytes size-field-length processor)
-  (let* [(sizebytes    (subbytes bytes 0 size-field-length))
-	 (size         (integer-bytes->integer sizebytes #f #t))]
-    (parse-raw-entity (subbytes bytes size-field-length) size processor)))
-
 ; Data mappers
 
 (define-binary-parser erlang-term-parser
@@ -103,24 +94,18 @@
   [ERL_LIST        (custom list-parser)]
   [ERL_SMALL_TUPLE (custom small-tuple-parser)]
 )
-;
 ; Recursive datatype parsers
-;
 
 ; Tuples
 (define (repeat-parser dbytes size-field-size size-field-converter finalizer)
   (let* [(sbytes  (subbytes dbytes 0 size-field-size))
 	 (ebytes (subbytes dbytes size-field-size))
 	 (nelems (size-field-converter sbytes))]
-    ; input is: bytes, countdown, accumulated elements
-    (letrec [(loop (lambda (b c accum)
-		     (fprintf (current-error-port) "Inner loop (~s) with ~s~n" c accum)
-		     (cond ((equal? c 0) (cons (finalizer (reverse accum)) b))
-			   (else 
-			     (match-let [((val . rbytes) (erlang-term-parser b))]
-					(loop rbytes (sub1 c) (cons val accum)))))
-	     ))]
-      (loop ebytes nelems (list)))))
+    (let loop ([b ebytes] [c nelems] [accum (list)])
+      (cond ((equal? c 0) (cons (finalizer (reverse accum)) b))
+	    (else 
+	     (match-let [((val . rbytes) (erlang-term-parser b))]
+			(loop rbytes (sub1 c) (cons val accum))))))))
 
 (define (small-tuple-parser dbytes) (repeat-parser dbytes 1 byte->uint (lambda (x) (list->vector x))))
 (define (large-tuple-parser dbytes) (repeat-parser dbytes 4 bytes->int (lambda (x) (list->vector x))))
@@ -128,6 +113,16 @@
   (match-let [((val . rbytes) (repeat-parser dbytes 4 bytes->int (lambda (x) x)))]
 	     (cons val (subbytes rbytes 1)))) ; Skip the trailing nil in lists.
 
+; Parser helpers
+(define (parse-raw-entity bytes size processor)
+  (let [(rem-bytes  (subbytes bytes size))
+	(data-bytes (subbytes bytes 0 size))]
+    (cons (processor data-bytes) rem-bytes)))
+
+(define (parse-sized-entity bytes size-field-length processor)
+  (let* [(sizebytes    (subbytes bytes 0 size-field-length))
+	 (size         (integer-bytes->integer sizebytes #f #t))]
+    (parse-raw-entity (subbytes bytes size-field-length) size processor)))
 
 (define (read-size-field)
   (let ([size-bytes (read-stream 4)])
